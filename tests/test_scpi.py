@@ -94,3 +94,13 @@ def test_output_on_off_commands():
     client.output_on()
     client.output_off()
     assert ser.written == [b"OUTP 1\r\n", b"OUTP 0\r\n"]
+
+
+def test_garbage_float_response_raises():
+    with pytest.raises(PSUError):
+        PSUClient(FakeSerial([b"garbage\r\n"])).measured_voltage()
+
+
+def test_garbage_output_response_raises():
+    with pytest.raises(PSUError):
+        PSUClient(FakeSerial([b"12.345\r\n"])).get_output()

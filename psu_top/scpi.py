@@ -47,7 +47,10 @@ class PSUClient:
         return self._query_float("CURR?")
 
     def get_output(self) -> bool:
-        return self._query("OUTP?").upper() == "ON"
+        text = self._query("OUTP?").upper()
+        if text not in ("ON", "OFF"):
+            raise PSUError(f"unexpected response to 'OUTP?': {text!r}")
+        return text == "ON"
 
     def set_voltage(self, volts: float) -> None:
         self._write(f"VOLT {_clamp(volts, self.VOLTAGE_MAX):.3f}")
