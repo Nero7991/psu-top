@@ -10,7 +10,11 @@ class FakeSerial:
 
     def __init__(self, responses=None):
         self.written = []
+        self.closed = False
         self._responses = list(responses or [])
+
+    def close(self):
+        self.closed = True
 
     def write(self, data):
         self.written.append(data)
@@ -104,3 +108,9 @@ def test_garbage_float_response_raises():
 def test_garbage_output_response_raises():
     with pytest.raises(PSUError):
         PSUClient(FakeSerial([b"12.345\r\n"])).get_output()
+
+
+def test_close_closes_port():
+    ser = FakeSerial()
+    PSUClient(ser).close()
+    assert ser.closed is True

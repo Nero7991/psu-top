@@ -112,7 +112,12 @@ class PSUTopApp(App):
                     output_on=client.get_output(),
                 )
             except (PSUError, serial.SerialException, OSError):
-                self._client = None
+                dead, self._client = self._client, None
+                if dead is not None:
+                    try:
+                        dead.close()
+                    except OSError:
+                        pass
                 if worker.is_cancelled:
                     return
                 self.call_from_thread(self._show_disconnected)

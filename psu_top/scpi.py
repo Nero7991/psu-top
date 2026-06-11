@@ -31,6 +31,10 @@ class PSUClient:
         self._ser = ser
         self._lock = threading.Lock()
 
+    def close(self) -> None:
+        with self._lock:
+            self._ser.close()
+
     def identify(self) -> str:
         return self._query("*IDN?")
 
