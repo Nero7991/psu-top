@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psu-top"
+version = "0.1.0"
+description = "htop-style terminal monitor and controller for SCPI bench power supplies (Kiprim DC310S / OWON SPE3103)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+    "textual>=0.50",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+psu-top = "psu_top.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["psu_top*"]
