@@ -167,7 +167,7 @@ class PSUTopApp(App):
         if client is None or last is None:
             return
         target = client.output_off if last.output_on else client.output_on
-        self.run_worker(target, thread=True)
+        self.run_worker(target, thread=True, exit_on_error=False)
 
     def action_set_voltage(self) -> None:
         self._prompt("voltage", "V")
@@ -195,7 +195,7 @@ class PSUTopApp(App):
         except ValueError:
             return
         setter = client.set_voltage if target == "voltage" else client.set_current
-        self.run_worker(lambda: setter(value), thread=True)
+        self.run_worker(lambda: setter(value), thread=True, exit_on_error=False)
 
     def on_key(self, event) -> None:
         if event.key == "escape":
