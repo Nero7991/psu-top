@@ -15,10 +15,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov"]
 
 [project.scripts]
 psu-top = "psu_top.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["psu_top*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
