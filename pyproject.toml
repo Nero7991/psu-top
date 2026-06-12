@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "htop-style terminal monitor and controller for SCPI bench power supplies (Kiprim DC310S / OWON SPE3103)"
 readme = "README.md"
 license = {text = "MIT"}
+authors = [{name = "Oren Collaco"}]
 requires-python = ">=3.10"
 dependencies = [
     "pyserial>=3.5",
@@ -16,6 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "pytest-cov"]
+
+[project.urls]
+Homepage = "https://github.com/Nero7991/psu-top"
+Issues = "https://github.com/Nero7991/psu-top/issues"
 
 [project.scripts]
 psu-top = "psu_top.__main__:main"
