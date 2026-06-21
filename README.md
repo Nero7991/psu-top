@@ -6,13 +6,21 @@ USB serial.
 
 ```
  PSU  KIPRIM DC310S  /dev/ttyUSB0  [CONNECTED]   OUTPUT: ON (CV)
-┌─ Voltage ──────────────────────┐┌─ Current ──────────────────────┐
-│  18.063 V   (set 18.100)       ││   1.077 A   (set 2.100)        │
-│  ▁▂▃▅▆▇█▇▆▅▃▂▁                 ││  ▁▂▃▅▆▇█▇▆▅▃▂▁                 │
-└────────────────────────────────┘└────────────────────────────────┘
+┌─ Voltage ──────────────────────────────────────────────────────────┐
+│  18.063 V   (set 18.100)                                            │
+│                          ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆▅▄ │
+└──────────────────────────────────────────────────────────────────────┘
+┌─ Current ──────────────────────────────────────────────────────────┐
+│   1.077 A   (set 2.100)                                             │
+│              ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇ │
+└──────────────────────────────────────────────────────────────────────┘
  Power:  19.45 W
- o Output on/off  v Set voltage  c Set current  q Quit
+ o Output on/off  v Set voltage  c Set current  r Clear graphs  q Quit
 ```
+
+The graphs are rolling, oscilloscope-style strip charts: one sample per column,
+newest on the right, scrolling left one column per poll. Heights autoscale to
+the samples currently on screen so low-magnitude signals stay visible.
 
 ## Install
 
@@ -27,7 +35,8 @@ psu-top                          # defaults: /dev/ttyUSB0, 115200, 0.3 s poll
 psu-top --port /dev/ttyUSB1 --baud 115200 --interval 0.5
 ```
 
-Keys: `v` set voltage, `c` set current, `o` toggle output, `q` quit.
+Keys: `v` set voltage, `c` set current, `o` toggle output, `r` clear graphs
+(empties the trace and rescales fresh), `q` quit.
 Values are clamped to 0-30 V / 0-10 A before sending.
 
 ## Protocol notes (Kiprim DC310S, FW V5.2.0)

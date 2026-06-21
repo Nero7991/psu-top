@@ -12,7 +12,7 @@ import serial
 from textual.widgets import Input, Static
 
 import psu_top.app as app_module
-from psu_top.app import MeterPanel, PSUTopApp
+from psu_top.app import WINDOW_SECONDS, History, MeterPanel, PSUTopApp, _Bars
 from psu_top.scpi import PSUError
 
 INTERVAL = 0.05
@@ -206,6 +206,141 @@ async def test_connect_builds_client_from_serial(monkeypatch):
         assert app._client is not None
         volt_text = str(app.query_one("#voltage", MeterPanel).query_one(".meter-value", Static).content)
         assert "12.000 V" in volt_text
+
+
+# ---- rolling history graph ----
+
+
+def _bars_to_rows(renderable, width: int, height: int) -> list[str]:
+    """Render a _Bars renderable to plain text rows (no color)."""
+    from rich.console import Console
+
+    con = Console(width=width, force_terminal=False, color_system=None)
+    with con.capture() as cap:
+        con.print(renderable, end="")
+    return cap.get().split("\n")
+
+
+def test_history_starts_empty_not_zero_filled():
+    """The graph must not be pre-seeded with a zero baseline."""
+    panel = MeterPanel("Voltage", "V", capacity=1000)
+    assert len(panel._graph._samples) == 0
+    assert panel._graph._samples.maxlen == 1000
+
+
+def test_capacity_is_five_minute_window():
+    """The window holds WINDOW_SECONDS worth of samples at the poll rate."""
+    app = PSUTopApp(port="/dev/fake0", baud=115200, interval=0.3)
+    assert app._capacity == round(WINDOW_SECONDS / 0.3)
+
+
+def test_history_columns_dont_stretch_and_fill_right_to_left():
+    """A part-full window occupies only its right portion -- newest at the right
+    edge, one sample per column, no stretching."""
+    h = History(capacity=100)
+    for _ in range(10):
+        h.add(5.0)
+    cols = h._columns(width=40)
+    filled = [c is not None for c in cols]
+    # one column per sample, anchored to the right edge; the rest stay empty
+    assert filled[-1] and not filled[0]
+    assert sum(filled) == 10  # 10 samples -> exactly 10 filled columns
+    assert filled == sorted(filled)  # contiguous block on the right (no gaps)
+
+
+def test_each_update_scrolls_exactly_one_column():
+    """Rolling rate == update rate: one new sample advances the trace by exactly
+    one column, every other bar keeping its height (just shifted left)."""
+    import math
+
+    h = History(capacity=100)
+    for i in range(50):
+        h.add(math.sin(i / 3))
+    width = 20
+    before = h._columns(width)
+    h.add(0.123)  # a single new sample
+    after = h._columns(width)
+    for c in range(1, width):  # the whole trace slid left by one column
+        assert before[c] == after[c - 1], (c, before[c], after[c - 1])
+    assert after[-1] == 0.123  # newest sample is the new rightmost column
+
+
+def test_clear_empties_the_graph():
+    """Clearing the graph drops all samples so the next reading rescales fresh."""
+    h = History(capacity=100)
+    for v in (1.0, 2.0, 3.0):
+        h.add(v)
+    assert len(h._samples) == 3
+    h.clear()
+    assert len(h._samples) == 0
+    assert all(c is None for c in h._columns(width=10))
+
+
+def test_autoscale_uses_whole_window_so_low_signals_are_visible():
+    """A window of small currents autoscales to its own min/max, so the spread
+    fills the graph height instead of collapsing to an invisible floor line."""
+    h = History(capacity=5)
+    for v in (0.01, 0.02, 0.03, 0.04, 0.05):  # tiny currents, ascending
+        h.add(v)
+    width = 5
+    cols = h._columns(width)  # one sample per column, right-aligned
+    data = h._samples
+    bars = _Bars(cols, 4, min(data), max(data), "white")
+    rows = _bars_to_rows(bars, width, 4)
+    # smallest value (left column) is near the floor; largest (right) reaches top
+    assert rows[0][-1] != " "   # top row, max column filled -> zoomed in
+    assert rows[0][0] == " "    # top row, min column empty
+    assert rows[-1][0] != " "   # bottom row, min column still has a base bar
+
+
+def test_scale_is_independent_of_window_size():
+    """The same min/max range renders the max at full height regardless of the
+    absolute magnitude -- proving it is window-relative, not a fixed scale."""
+    small = History(capacity=2)
+    small.add(0.01)
+    small.add(0.05)
+    big = History(capacity=2)
+    big.add(2.0)
+    big.add(10.0)
+    rows_small = _bars_to_rows(
+        _Bars(small._columns(2), 4, 0.01, 0.05, "white"), 2, 4
+    )
+    rows_big = _bars_to_rows(
+        _Bars(big._columns(2), 4, 2.0, 10.0, "white"), 2, 4
+    )
+    # both reach full height for their own max despite very different magnitudes
+    assert rows_small[0][-1] != " " and rows_big[0][-1] != " "
+
+
+async def test_graph_plots_only_real_samples():
+    """Once connected, the voltage graph holds only measured values, never an
+    injected 0.0 floor."""
+    client = FakeClient(volts=12.0, set_volts=12.0, output_on=True)
+    app = make_app(client)
+    async with app.run_test() as pilot:
+        await wait_for_header(pilot, app, "[CONNECTED]")
+        await pilot.pause(0.2)  # let a few samples accumulate
+        graph = app.query_one("#voltage", MeterPanel)._graph
+        data = list(graph._samples)
+        assert data, "graph should have at least one sample"
+        assert all(v == 12.0 for v in data), data
+        assert len(data) <= graph._capacity
+
+
+async def test_r_key_clears_both_graphs():
+    """The 'r' binding empties both channel graphs so they rescale fresh."""
+    client = FakeClient()
+    app = make_app(client)
+    async with app.run_test() as pilot:
+        await wait_for_header(pilot, app, "[CONNECTED]")
+        await pilot.pause(0.4)  # accumulate a clear backlog of samples
+        volt = app.query_one("#voltage", MeterPanel)._graph
+        curr = app.query_one("#current", MeterPanel)._graph
+        assert len(volt._samples) >= 4 and len(curr._samples) >= 4
+        await pilot.press("r")
+        # cleared to empty; the background poll may have re-added at most a sample
+        assert len(volt._samples) <= 1
+        assert len(curr._samples) <= 1
 
 
 # ---- CV/CC derivation ----

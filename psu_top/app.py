@@ -5,18 +5,23 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
+from typing import ClassVar
 
 import serial
+from rich.console import Console, ConsoleOptions, RenderResult
+from rich.segment import Segment
+from rich.style import Style
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Input, Sparkline, Static
+from textual.containers import Vertical
+from textual.widget import Widget
+from textual.widgets import Footer, Input, Static
 from textual.worker import get_current_worker
 
 from .scpi import PSUClient, PSUError
 
-HISTORY = 600          # samples kept per channel (~3 min at the 0.3 s default)
-CC_MARGIN = 0.05       # amps below the limit at which we call the mode CC
-RECONNECT_DELAY = 2.0  # seconds between reopen attempts after a serial error
+WINDOW_SECONDS = 300.0  # width of the rolling time window shown in each graph
+CC_MARGIN = 0.05        # amps below the limit at which we call the mode CC
+RECONNECT_DELAY = 2.0   # seconds between reopen attempts after a serial error
 
 
 @dataclass
@@ -28,25 +33,125 @@ class Sample:
     output_on: bool
 
 
-class MeterPanel(Vertical):
-    """One bordered panel: live value + setpoint + sparkline history."""
+class _Bars:
+    """Rich renderable for a rolling column graph.
 
-    def __init__(self, title: str, unit: str, **kwargs) -> None:
+    ``columns`` is one value (or None for "no data yet") per character cell, one
+    raw sample each. Bar height is the value scaled against ``low``/``high`` --
+    the min and max of the samples currently on screen -- so the scale zooms to
+    the visible data and low currents stay visible.
+    """
+
+    BARS = "▁▂▃▄▅▆▇█"  # eight eighths, index 0 = shortest
+
+    def __init__(
+        self, columns: list[float | None], height: int, low: float, high: float, color
+    ) -> None:
+        self._columns = columns
+        self._height = height
+        self._low = low
+        self._extent = (high - low) or 0.0
+        self._style = Style.from_color(color)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        cols = self._columns
+        height = self._height
+        per_row = len(self.BARS)               # eighths per text row
+        span = per_row * height - 1            # total addressable eighths
+        for row in reversed(range(height)):    # top row first
+            floor = row * per_row
+            for value in cols:
+                if value is None:
+                    yield Segment(" ")
+                    continue
+                # A flat (zero-extent) window sits mid-height rather than on the
+                # floor, so a steady reading reads as a level line, not "empty".
+                ratio = 0.5 if not self._extent else (value - self._low) / self._extent
+                ratio = 0.0 if ratio < 0.0 else 1.0 if ratio > 1.0 else ratio
+                index = int(ratio * span)
+                if index < floor:
+                    yield Segment(" ")
+                elif index >= floor + per_row:
+                    yield Segment("█", self._style)
+                else:
+                    yield Segment(self.BARS[index - floor], self._style)
+            if row > 0:
+                yield Segment.line()
+
+
+class History(Widget):
+    """A rolling, oscilloscope-style bar graph: one sample per column.
+
+    The newest sample sits at the right edge and the trace scrolls one column
+    left per poll. Heights autoscale to the min/max of the samples on screen, so
+    low-magnitude signals stay visible. ``clear()`` empties the trace, which also
+    forces a fresh autoscale as new samples arrive.
+    """
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = {"history--bar"}
+    DEFAULT_CSS = """
+    History > .history--bar { color: $primary; }
+    """
+
+    def __init__(self, capacity: int, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._capacity = max(1, capacity)
+        self._samples: deque[float] = deque(maxlen=self._capacity)
+
+    def add(self, value: float) -> None:
+        self._samples.append(float(value))
+        self.refresh()
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self.refresh()
+
+    def _columns(self, width: int) -> list[float | None]:
+        """One raw sample per column, newest at the right.
+
+        The graph shows the most recent ``width`` samples, so each poll advances
+        the trace exactly one column (rolling rate == update rate) and a sample's
+        height never changes once drawn -- it simply slides left. Older samples
+        beyond the terminal width stay in the buffer but off-screen.
+        """
+        data = list(self._samples)
+        count = len(data)
+        if count >= width:
+            return list(data[-width:])           # newest width samples, right-aligned
+        return [None] * (width - count) + list(data)  # part-full: pad the left
+
+    def render(self) -> RenderResult:
+        width, height = self.size.width, self.size.height
+        if width <= 0 or height <= 0:
+            return Segment("")
+        columns = self._columns(width)
+        visible = [c for c in columns if c is not None]
+        low, high = (min(visible), max(visible)) if visible else (0.0, 1.0)
+        color = self.get_component_styles("history--bar").color
+        return _Bars(columns, height, low, high, color.rich_color)
+
+
+class MeterPanel(Vertical):
+    """One bordered panel: live value + setpoint + rolling history graph."""
+
+    def __init__(self, title: str, unit: str, capacity: int, **kwargs) -> None:
         super().__init__(**kwargs)
         self.border_title = title
         self._unit = unit
-        self._history: deque[float] = deque([0.0] * HISTORY, maxlen=HISTORY)
+        self._graph = History(capacity)
 
     def compose(self) -> ComposeResult:
         yield Static("--", classes="meter-value")
-        yield Sparkline(list(self._history))
+        yield self._graph
 
     def update_value(self, measured: float, setpoint: float) -> None:
-        self._history.append(measured)
+        self._graph.add(measured)
         self.query_one(".meter-value", Static).update(
             f"{measured:8.3f} {self._unit}   (set {setpoint:.3f})"
         )
-        self.query_one(Sparkline).data = list(self._history)
+
+    def clear_graph(self) -> None:
+        self._graph.clear()
 
 
 class PSUTopApp(App):
@@ -57,7 +162,7 @@ class PSUTopApp(App):
     #power { height: 1; }
     MeterPanel { border: round $primary; height: 9; }
     .meter-value { height: 1; }
-    Sparkline { height: 4; margin: 1 0 0 0; }
+    History { height: 4; margin: 1 0 0 0; }
     #entry { display: none; }
     #entry.visible { display: block; }
     """
@@ -70,6 +175,7 @@ class PSUTopApp(App):
         ("o", "toggle_output", "Output on/off"),
         ("v", "set_voltage", "Set voltage"),
         ("c", "set_current", "Set current"),
+        ("r", "clear_graphs", "Clear graphs"),
         ("q", "quit", "Quit"),
     ]
 
@@ -78,6 +184,8 @@ class PSUTopApp(App):
         self._port = port
         self._baud = baud
         self._interval = interval
+        # Samples that fill the rolling window at the current poll rate.
+        self._capacity = max(1, round(WINDOW_SECONDS / interval))
         self._client: PSUClient | None = None
         self._identity = ""
         self._last: Sample | None = None
@@ -85,9 +193,9 @@ class PSUTopApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(" connecting...", id="header")
-        with Horizontal():
-            yield MeterPanel("Voltage", "V", id="voltage")
-            yield MeterPanel("Current", "A", id="current")
+        # Stacked, not side by side, so each graph spans the full terminal width.
+        yield MeterPanel("Voltage", "V", self._capacity, id="voltage")
+        yield MeterPanel("Current", "A", self._capacity, id="current")
         yield Static(id="power")
         yield Input(id="entry")
         yield Footer()
@@ -179,6 +287,10 @@ class PSUTopApp(App):
 
     def action_set_current(self) -> None:
         self._prompt("current", "A")
+
+    def action_clear_graphs(self) -> None:
+        for panel in self.query(MeterPanel):
+            panel.clear_graph()
 
     def _prompt(self, target: str, unit: str) -> None:
         if self._client is None:
