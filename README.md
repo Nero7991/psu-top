@@ -25,6 +25,12 @@ the samples currently on screen so low-magnitude signals stay visible.
 ## Install
 
 ```bash
+pip install psu-top
+```
+
+From a checkout, for development:
+
+```bash
 pip install --user -e .
 ```
 

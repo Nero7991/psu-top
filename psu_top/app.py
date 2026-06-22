@@ -123,7 +123,7 @@ class History(Widget):
     def render(self) -> RenderResult:
         width, height = self.size.width, self.size.height
         if width <= 0 or height <= 0:
-            return Segment("")
+            return ""
         columns = self._columns(width)
         visible = [c for c in columns if c is not None]
         low, high = (min(visible), max(visible)) if visible else (0.0, 1.0)
@@ -238,8 +238,12 @@ class PSUTopApp(App):
 
     def _connect(self) -> None:
         ser = serial.Serial(self._port, self._baud, timeout=1)
-        client = PSUClient(ser)
-        idn = client.identify()                  # e.g. KIPRIM,DC310S,25012662,FV:V5.2.0
+        try:
+            client = PSUClient(ser)
+            idn = client.identify()              # e.g. KIPRIM,DC310S,25012662,FV:V5.2.0
+        except Exception:
+            ser.close()                          # don't leak the port if identify fails
+            raise
         self._identity = " ".join(idn.split(",")[:2])
         self._client = client
 
@@ -275,12 +279,27 @@ class PSUTopApp(App):
 
     # ---- controls ----
 
+    def _run_control(self, fn) -> None:
+        """Run a control command off the UI thread, surfacing any error.
+
+        Control writes can race a serial disconnect; on failure we notify
+        rather than let the worker die silently (the next poll would also
+        report it, but only after a visible lag).
+        """
+        def task() -> None:
+            try:
+                fn()
+            except (PSUError, serial.SerialException, OSError) as exc:
+                self.call_from_thread(self.notify, f"Command failed: {exc}", severity="error")
+
+        self.run_worker(task, thread=True, exit_on_error=False)
+
     def action_toggle_output(self) -> None:
         client, last = self._client, self._last
         if client is None or last is None:
             return
         target = client.output_off if last.output_on else client.output_on
-        self.run_worker(target, thread=True, exit_on_error=False)
+        self._run_control(target)
 
     def action_set_voltage(self) -> None:
         self._prompt("voltage", "V")
@@ -312,7 +331,7 @@ class PSUTopApp(App):
         except ValueError:
             return
         setter = client.set_voltage if target == "voltage" else client.set_current
-        self.run_worker(lambda: setter(value), thread=True, exit_on_error=False)
+        self._run_control(lambda: setter(value))
 
     def on_key(self, event) -> None:
         if event.key == "escape":

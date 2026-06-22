@@ -23,6 +23,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.interval <= 0:
+        print(f"psu-top: --interval must be positive (got {args.interval})", file=sys.stderr)
+        return 1
     try:
         serial.Serial(args.port, args.baud, timeout=1).close()
     except (serial.SerialException, OSError) as exc:
