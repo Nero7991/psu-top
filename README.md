@@ -37,9 +37,16 @@ pip install --user -e .
 ## Usage
 
 ```bash
-psu-top                          # defaults: /dev/ttyUSB0, 115200, 0.3 s poll
+psu-top                          # auto-detect the supply; 115200, 0.3 s poll
 psu-top --port /dev/ttyUSB1 --baud 115200 --interval 0.5
 ```
+
+With no `--port`, psu-top probes every serial port with `*IDN?` and uses the
+one that answers as a Kiprim/OWON supply. If several are connected it shows a
+numbered menu to pick one (or pass `--port` to skip it); if none answer it says
+so and prints the ports it tried. (Probing writes `*IDN?` to every port, so pass
+`--port` explicitly if other instruments share the bench.) When stdin is not a
+terminal the menu is skipped and the candidates are listed instead.
 
 Keys: `v` set voltage, `c` set current, `o` toggle output, `r` clear graphs
 (empties the trace and rescales fresh), `q` quit.
